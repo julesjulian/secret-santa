@@ -131,7 +131,7 @@ call with the --send argument:\n\n$ python secret_santa.py --send""" % ("\n".joi
             frm = config['FROM']
             to = pair.giver.email
             subject = config['SUBJECT'].format(santa=pair.giver.name, santee=pair.receiver.name)
-            body = (HEADER+config['MESSAGE']).format(
+            body = (HEADER + '\n' + config['MESSAGE']).format(
                 date=date,
                 message_id=message_id,
                 frm=frm,
