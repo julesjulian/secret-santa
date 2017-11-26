@@ -13,6 +13,9 @@ import sys
 import getopt
 import os
 
+from cycles import get_all_full_cycles
+
+
 help_message = '''
 To use, fill out config.yml with your own participants. You can also specify 
 DONT_PAIR so that people don't get assigned their significant other.
@@ -62,19 +65,18 @@ class Pair:
     def __str__(self):
         return "%s ---> %s" % (self.giver.name, self.receiver.name)
 
-def choose_receiver(giver, receivers):
-    random.shuffle(receivers)
-    for receiver in receivers:
-        if receiver.name not in giver.invalid_receivers and giver != receiver:
-            return receiver
-    raise Exception("No receiver found for %s." % giver.name)
-
 def create_pairs(givers, receivers):
     pairs = []
+    graph = dict.fromkeys(givers) 
     for giver in givers:
-        receiver = choose_receiver(giver, receivers)
+        graph[giver] = set()
+        for receiver in receivers:
+            if receiver.name not in giver.invalid_receivers:
+                graph[giver].add(receiver)
+    all_full_cycles = get_all_full_cycles(graph, list(graph.keys())[0])
+    chosen_full_cycle = random.choice(all_full_cycles)
+    for giver, receiver in zip(chosen_full_cycle[:-1], chosen_full_cycle[1:]):
         pairs.append(Pair(giver, receiver))
-        receivers.remove(receiver)
     return pairs
 
 def main(argv=None):
