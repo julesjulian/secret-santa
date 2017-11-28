@@ -1,0 +1,15 @@
+language: python
+python:
+  - "3.3"
+  - "3.4"
+  - "3.5"
+install:
+  - pip install .
+  - pip install -U pytz pyyaml pylint coverage pep8 pydocstyle coveralls
+script:
+  - coverage run --source secret-santa/ -m py.test -v
+  - pep8 --max-line-length=100 secret_santa
+  - pylint --reports=no --rcfile .pylintrc secret-santa
+  - pydocstyle secret-santa
+after_success:
+  coveralls

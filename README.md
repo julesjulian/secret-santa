@@ -1,3 +1,8 @@
+Secret Santa
+============
+
+[![Build Status](https://travis-ci.org/julesjulian/secret-santa.svg?branch=master)](https://travis-ci.org/julesjulian/secret-santa)[![Coverage Status](https://coveralls.io/repos/github/julesjulian/secret-santa/badge.svg?branch=master)](https://coveralls.io/github/julesjulian/secret-santa?branch=master)
+
 Intro
 =====
 
