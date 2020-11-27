@@ -96,7 +96,7 @@ def main(argv=None):
             if option in ("-h", "--help"):
                 print(help_message)
 
-        config = yaml.load(open(CONFIG_PATH))
+        config = yaml.load(open(CONFIG_PATH), Loader=yaml.FullLoader)
         for key in REQRD:
             if key not in config.keys():
                 raise Exception('Required parameter %s not in yaml config file!' % key)
