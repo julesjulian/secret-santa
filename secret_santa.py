@@ -127,11 +127,11 @@ def main(argv=None):
         if not send:
             print( """Test pairings:\n\n%s\n\nTo send out emails with new pairings,
 call with the --send argument:\n\n$ python secret_santa.py --send""" % ("\n".join([str(p) for p in pairs])))
-
+        server = None
         if send:
             email_username = input('Username for {} (skip if using only Signal): '.format(config['SMTP_SERVER']))
-            email_password = getpass.getpass()
-            if email_username is not None:
+            if len(email_username) > 0:
+                email_password = getpass.getpass()
                 server = smtplib.SMTP(config['SMTP_SERVER'], config['SMTP_PORT'])
                 server.starttls()
                 server.login(email_username, email_password)
@@ -143,7 +143,7 @@ call with the --send argument:\n\n$ python secret_santa.py --send""" % ("\n".joi
                         receiver=pair.receiver,
                         config=config
                     )
-                    print("Signaled %s <%s>" % (pair.giver.name, to))
+                    print(f"Signaled {pair.giver.name} <{pair.giver.email}>")
                 else:
                     send_email_message(
                         giver=pair.giver,
@@ -151,14 +151,15 @@ call with the --send argument:\n\n$ python secret_santa.py --send""" % ("\n".joi
                         server=server,
                         config=config
                     )
-                    print( "Emailed %s <%s>" % (pair.giver.name, to))
+                    print(f"Emailed {pair.giver.name} <{pair.giver.email}>")
 
-        if send:
+        if server is not None:
             server.quit()
 
     except Exception as e:
         print("ERROR: ", e)
         print( "For help, use --help")
+        raise
         return 2
 
 def send_email_message(giver, receiver, server, config):
