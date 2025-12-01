@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import yaml # sudo pip install pyyaml
+import yaml
 import re
 import random
 import getpass
@@ -17,27 +17,29 @@ import subprocess
 from cycles import get_all_full_cycles
 
 
-help_message = '''
-To use, fill out config.yml with your own participants. You can also specify 
-DONT_PAIR so that people don't get assigned their significant other.
+HELP_MESSAGE = """
+Use config.yml to specify participants and settings.
 
-You'll also need to specify your mail server settings. An example is provided
-for routing mail through gmail.
+DONT_PAIR defines forbidden giver→receiver combinations.
+SMTP settings are required for email delivery (skip login to use Signal only).
 
-For more information, see README.
-'''
+See README for details.
+"""
 
-REQRD = (
-    'SMTP_SERVER',
-    'SMTP_PORT',
-    'TIMEZONE',
-    'PARTICIPANTS',
-    'DONT_PAIR',
-    'FROM',
-    'SUBJECT',
-    'MESSAGE',
-    'SENDER_SIGNAL_NUMBER'
-)
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.yml")
+
+REQUIRED_CONFIG_KEYS = {
+    "SMTP_SERVER",
+    "SMTP_PORT",
+    "TIMEZONE",
+    "PARTICIPANTS",
+    "DONT_PAIR",
+    "FROM",
+    "SUBJECT",
+    "MESSAGE",
+    "SENDER_SIGNAL_NUMBER",
+}
+
 
 HEADER = """Date: {date}
 Content-Type: text/plain; charset="utf-8"
@@ -45,22 +47,22 @@ Message-Id: {message_id}
 From: {frm}
 To: {to}
 Subject: {subject}
-        
+
 """
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'config.yml')
 
-SENDER_SIGNAL_NUMBER = '+18082782243'
-
+# ---------------------------------------------------------
+# Data Models
+# ---------------------------------------------------------
 
 class Person:
-    def __init__(self, name, email, invalid_receivers=[]):
+    def __init__(self, name, email, invalid_receivers=None):
         self.name = name
         self.email = email
-        self.invalid_receivers = invalid_receivers
+        self.invalid_receivers = invalid_receivers or []
 
     def __str__(self):
-        return "%s <%s>" % (self.name, self.email)
+        return f"{self.name} <{self.email}>"
 
 
 class Pair:
@@ -69,136 +71,186 @@ class Pair:
         self.receiver = receiver
 
     def __str__(self):
-        return "%s ---> %s" % (self.giver.name, self.receiver.name)
+        return f"{self.giver.name} ---> {self.receiver.name}"
 
+
+# ---------------------------------------------------------
+# Pair generation
+# ---------------------------------------------------------
 
 def create_pairs(givers, receivers):
-    pairs = []
-    graph = dict.fromkeys(givers)
+    graph = {}
+
     for giver in givers:
-        graph[giver] = set()
-        for receiver in receivers:
-            if receiver.name not in giver.invalid_receivers:
-                graph[giver].add(receiver)
+        graph[giver] = {
+            r for r in receivers if r.name not in giver.invalid_receivers
+        }
+
     all_full_cycles = get_all_full_cycles(graph, list(graph.keys())[0])
     chosen_full_cycle = random.choice(all_full_cycles)
-    for giver, receiver in zip(chosen_full_cycle[:-1], chosen_full_cycle[1:]):
-        pairs.append(Pair(giver, receiver))
-    return pairs
+
+    return [
+        Pair(giver, receiver)
+        for giver, receiver in zip(chosen_full_cycle[:-1], chosen_full_cycle[1:])
+    ]
+
+
+# ---------------------------------------------------------
+# Config + participant loading
+# ---------------------------------------------------------
+
+def load_config():
+    with open(CONFIG_PATH, "r") as f:
+        config = yaml.safe_load(f)
+
+    missing = REQUIRED_CONFIG_KEYS - config.keys()
+    if missing:
+        raise ValueError(f"Missing required config keys: {missing}")
+
+    return config
+
+
+def load_participants(config):
+    participants = []
+
+    for raw in config["PARTICIPANTS"]:
+        name, email = re.match(r"([^<]*)<([^>]*)>", raw).groups()
+        name = name.strip()
+
+        invalid = []
+        for rule in config["DONT_PAIR"]:
+            g, r = [p.strip() for p in rule.split("->")]
+            if g == name:
+                invalid.append(r)
+
+        participants.append(Person(name, email, invalid))
+
+    return participants
+
+
+# ---------------------------------------------------------
+# Notifier – centralizes email + Signal sending
+# ---------------------------------------------------------
+
+class Notifier:
+    def __init__(self, config, enable_send):
+        self.config = config
+        self.enable_send = enable_send
+        self.smtp = None
+
+        if enable_send:
+            self._maybe_setup_smtp()
+
+    def _maybe_setup_smtp(self):
+        username = input(f"Username for {self.config['SMTP_SERVER']} (blank = Signal only): ")
+
+        if not username:
+            return
+
+        password = getpass.getpass()
+        smtp = smtplib.SMTP(self.config["SMTP_SERVER"], self.config["SMTP_PORT"])
+        smtp.starttls()
+        smtp.login(username, password)
+        self.smtp = smtp
+
+    def send(self, giver, receiver):
+        """Choose email or Signal based on giver's email format."""
+        if not self.enable_send:
+            return
+
+        if giver.email.startswith("+"):
+            self.send_signal(giver, receiver)
+        else:
+            self.send_email(giver, receiver)
+
+    def send_email(self, giver, receiver):
+        if self.smtp is None:
+            print(f"Skipping email for {giver} (SMTP disabled).")
+            return
+
+        zone = pytz.timezone(self.config["TIMEZONE"])
+        now = zone.localize(datetime.datetime.now())
+
+        body = (HEADER + "\n" + self.config["MESSAGE"]).format(
+            date=now.strftime("%a, %d %b %Y %T %Z"),
+            message_id=f"<{time.time()}-{random.random()}@{socket.gethostname()}>",
+            frm=self.config["FROM"],
+            to=giver.email,
+            subject=self.config["SUBJECT"].format(santa=giver.name, santee=receiver.name),
+            santa=giver.name,
+            santee=receiver.name,
+        )
+
+        self.smtp.sendmail(self.config["FROM"], [giver.email], body)
+        print(f"Emailed {giver}")
+
+    def send_signal(self, giver, receiver):
+        msg = self.config["MESSAGE"].format(santa=giver.name, santee=receiver.name)
+
+        try:
+            subprocess.run(
+                [
+                    "signal-cli",
+                    "-u",
+                    self.config["SENDER_SIGNAL_NUMBER"],
+                    "send",
+                    "-m",
+                    msg,
+                    giver.email,
+                ],
+                check=True,
+            )
+            print(f"Signaled {giver}")
+        except subprocess.CalledProcessError as e:
+            print(f"Signal send failed for {giver}: {e}")
+
+    def close(self):
+        if self.smtp:
+            self.smtp.quit()
+
+
+# ---------------------------------------------------------
+# Main
+# ---------------------------------------------------------
 
 def main(argv=None):
-    if argv is None:
-        argv = sys.argv
+    argv = argv or sys.argv
+
+    opts, _ = getopt.getopt(argv[1:], "shc", ["send", "help"])
+    send = any(opt in ("-s", "--send") for opt, _ in opts)
+
+    if any(opt in ("-h", "--help") for opt, _ in opts):
+        print(HELP_MESSAGE)
+        return
+
     try:
-        try:
-            opts, args = getopt.getopt(argv[1:], "shc", ["send", "help"])
-        except getopt.error as msg:
-            raise Exception(msg)
+        config = load_config()
+        participants = load_participants(config)
 
-        # option processing
-        send = False
-        for option, value in opts:
-            if option in ("-s", "--send"):
-                send = True
-            if option in ("-h", "--help"):
-                print(help_message)
-
-        config = yaml.load(open(CONFIG_PATH))
-        for key in REQRD:
-            if key not in config.keys():
-                raise Exception('Required parameter %s not in yaml config file!' % key)
-
-        participants = config['PARTICIPANTS']
-        dont_pair = config['DONT_PAIR']
         if len(participants) < 2:
-            raise Exception('Not enough participants specified.')
-        givers = []
-        for person in participants:
-            name, email = re.match(r'([^<]*)<([^>]*)>', person).groups()
-            name = name.strip()
-            invalid_receivers = []
-            for pair in dont_pair:
-                names = [n.strip() for n in pair.split('->')]
-                if names[0] == name:
-                    invalid_receivers.append(names[1])
-            person = Person(name, email, invalid_receivers)
-            givers.append(person)
-        pairs = create_pairs(givers, givers.copy())
-        if not send:
-            print( """Test pairings:\n\n%s\n\nTo send out emails with new pairings,
-call with the --send argument:\n\n$ python secret_santa.py --send""" % ("\n".join([str(p) for p in pairs])))
-        server = None
-        if send:
-            email_username = input('Username for {} (skip if using only Signal): '.format(config['SMTP_SERVER']))
-            if len(email_username) > 0:
-                email_password = getpass.getpass()
-                server = smtplib.SMTP(config['SMTP_SERVER'], config['SMTP_PORT'])
-                server.starttls()
-                server.login(email_username, email_password)
-        for pair in pairs:
-            if send:
-                if pair.giver.email.startswith("+"):
-                    send_signal_message(
-                        giver=pair.giver,
-                        receiver=pair.receiver,
-                        config=config
-                    )
-                    print(f"Signaled {pair.giver.name} <{pair.giver.email}>")
-                else:
-                    send_email_message(
-                        giver=pair.giver,
-                        receiver=pair.receiver,
-                        server=server,
-                        config=config
-                    )
-                    print(f"Emailed {pair.giver.name} <{pair.giver.email}>")
+            raise ValueError("At least two participants required.")
 
-        if server is not None:
-            server.quit()
+        pairs = create_pairs(participants, participants[:])
+
+        if not send:
+            print("Test pairings:\n")
+            for p in pairs:
+                print(p)
+            print("\nRun with --send to notify participants.")
+            return
+
+        notifier = Notifier(config=config, enable_send=True)
+
+        for p in pairs:
+            notifier.send(p.giver, p.receiver)
+
+        notifier.close()
 
     except Exception as e:
-        print("ERROR: ", e)
-        print( "For help, use --help")
+        print("ERROR:", e)
+        print("Use --help for usage details.")
         raise
-        return 2
 
-def send_email_message(giver, receiver, server, config):
-    zone = pytz.timezone(config['TIMEZONE'])
-    now = zone.localize(datetime.datetime.now())
-    date = now.strftime('%a, %d %b %Y %T %Z')  # Sun, 21 Dec 2008 06:25:23 +0000
-    message_id = '<%s@%s>' % (str(time.time()) + str(random.random()), socket.gethostname())
-    frm = config['FROM']
-    to = giver.email
-    subject = config['SUBJECT'].format(santa=giver.name, santee=receiver.name)
-    body = (HEADER + '\n' + config['MESSAGE']).format(
-        date=date,
-        message_id=message_id,
-        frm=frm,
-        to=to,
-        subject=subject,
-        santa=giver.name,
-        santee=receiver.name,
-    )
-    server.sendmail(frm, [to], body)
-
-
-def send_signal_message(giver, receiver, config):
-    message = config['MESSAGE'].format(
-        santa=giver.name,
-        santee=receiver.name
-    )
-    try:
-        subprocess.run([
-            "signal-cli",
-            "-u",
-            config["SENDER_SIGNAL_NUMBER"],
-            "send",
-            "-m",
-            message,
-            giver.email
-        ], check=True)
-    except subprocess.CalledProcessError as e:
-        print(f"Command failed with error: {e}")
 
 if __name__ == "__main__":
     main()
