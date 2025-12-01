@@ -1,6 +1,7 @@
 # Required to connect to your outgoing mail server. Example for using gmail:
 SMTP_SERVER: smtp.gmail.com
 SMTP_PORT: 587
+SENDER_SIGNAL_NUMBER: "+12223334444"
 
 TIMEZONE: 'US/Pacific'
 
