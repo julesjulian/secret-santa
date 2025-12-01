@@ -12,6 +12,7 @@ import socket
 import sys
 import getopt
 import os
+import subprocess
 
 from cycles import get_all_full_cycles
 
@@ -35,6 +36,7 @@ REQRD = (
     'FROM',
     'SUBJECT',
     'MESSAGE',
+    'SENDER_SIGNAL_NUMBER'
 )
 
 HEADER = """Date: {date}
@@ -48,6 +50,9 @@ Subject: {subject}
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'config.yml')
 
+SENDER_SIGNAL_NUMBER = '+18082782243'
+
+
 class Person:
     def __init__(self, name, email, invalid_receivers=[]):
         self.name = name
@@ -57,6 +62,7 @@ class Person:
     def __str__(self):
         return "%s <%s>" % (self.name, self.email)
 
+
 class Pair:
     def __init__(self, giver, receiver):
         self.giver = giver
@@ -65,9 +71,10 @@ class Pair:
     def __str__(self):
         return "%s ---> %s" % (self.giver.name, self.receiver.name)
 
+
 def create_pairs(givers, receivers):
     pairs = []
-    graph = dict.fromkeys(givers) 
+    graph = dict.fromkeys(givers)
     for giver in givers:
         graph[giver] = set()
         for receiver in receivers:
@@ -122,29 +129,29 @@ def main(argv=None):
 call with the --send argument:\n\n$ python secret_santa.py --send""" % ("\n".join([str(p) for p in pairs])))
 
         if send:
-            server = smtplib.SMTP(config['SMTP_SERVER'], config['SMTP_PORT'])
-            server.starttls()
-            server.login(input('Username for {}: '.format(config['SMTP_SERVER'])), getpass.getpass())
+            email_username = input('Username for {} (skip if using only Signal): '.format(config['SMTP_SERVER']))
+            email_password = getpass.getpass()
+            if email_username is not None:
+                server = smtplib.SMTP(config['SMTP_SERVER'], config['SMTP_PORT'])
+                server.starttls()
+                server.login(email_username, email_password)
         for pair in pairs:
-            zone = pytz.timezone(config['TIMEZONE'])
-            now = zone.localize(datetime.datetime.now())
-            date = now.strftime('%a, %d %b %Y %T %Z') # Sun, 21 Dec 2008 06:25:23 +0000
-            message_id = '<%s@%s>' % (str(time.time())+str(random.random()), socket.gethostname())
-            frm = config['FROM']
-            to = pair.giver.email
-            subject = config['SUBJECT'].format(santa=pair.giver.name, santee=pair.receiver.name)
-            body = (HEADER + '\n' + config['MESSAGE']).format(
-                date=date,
-                message_id=message_id,
-                frm=frm,
-                to=to,
-                subject=subject,
-                santa=pair.giver.name,
-                santee=pair.receiver.name,
-            )
             if send:
-                result = server.sendmail(frm, [to], body)
-                print( "Emailed %s <%s>" % (pair.giver.name, to))
+                if pair.giver.email.startswith("+"):
+                    send_signal_message(
+                        giver=pair.giver,
+                        receiver=pair.receiver,
+                        config=config
+                    )
+                    print("Signaled %s <%s>" % (pair.giver.name, to))
+                else:
+                    send_email_message(
+                        giver=pair.giver,
+                        receiver=pair.receiver,
+                        server=server,
+                        config=config
+                    )
+                    print( "Emailed %s <%s>" % (pair.giver.name, to))
 
         if send:
             server.quit()
@@ -154,6 +161,43 @@ call with the --send argument:\n\n$ python secret_santa.py --send""" % ("\n".joi
         print( "For help, use --help")
         return 2
 
+def send_email_message(giver, receiver, server, config):
+    zone = pytz.timezone(config['TIMEZONE'])
+    now = zone.localize(datetime.datetime.now())
+    date = now.strftime('%a, %d %b %Y %T %Z')  # Sun, 21 Dec 2008 06:25:23 +0000
+    message_id = '<%s@%s>' % (str(time.time()) + str(random.random()), socket.gethostname())
+    frm = config['FROM']
+    to = giver.email
+    subject = config['SUBJECT'].format(santa=giver.name, santee=receiver.name)
+    body = (HEADER + '\n' + config['MESSAGE']).format(
+        date=date,
+        message_id=message_id,
+        frm=frm,
+        to=to,
+        subject=subject,
+        santa=giver.name,
+        santee=receiver.name,
+    )
+    server.sendmail(frm, [to], body)
+
+
+def send_signal_message(giver, receiver, config):
+    message = config['MESSAGE'].format(
+        santa=giver.name,
+        santee=receiver.name
+    )
+    try:
+        subprocess.run([
+            "signal-cli",
+            "-u",
+            config["SENDER_SIGNAL_NUMBER"],
+            "send",
+            "-m",
+            message,
+            giver.email
+        ], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Command failed with error: {e}")
 
 if __name__ == "__main__":
     main()
